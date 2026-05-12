@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react
 import { TrendingUp, Receipt, Users, Camera, Database, Download, LogOut, Plus, X, Search, Trash2, FileText, PieChart, BarChart3 } from 'lucide-react'
 import './index.css'
 
-const API_URL = '/api'
+const API_URL = window.location.origin + '/api';
 
 function Login({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false)
