@@ -1,9 +1,24 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom'
-import { TrendingUp, Receipt, Users, Camera, Database, Download, LogOut, Plus, X, Search, Trash2, FileText, PieChart, BarChart3 } from 'lucide-react'
+import { TrendingUp, Receipt, Users, Camera, Database, Download, LogOut, X, Trash2, FileText, PieChart, BarChart3 } from 'lucide-react'
+import { initializeApp } from 'firebase/app'
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
+import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, where } from 'firebase/firestore'
 import './index.css'
 
-const API_URL = window.location.origin + '/api';
+// TODO: Replace with your Firebase config from Firebase Console
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+}
+
+const app = initializeApp(firebaseConfig)
+const auth = getAuth(app)
+const db = getFirestore(app)
 
 function Login({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false)
@@ -18,28 +33,27 @@ function Login({ onLogin }) {
     setError('')
     
     try {
-      const endpoint = isRegister ? '/auth/register' : '/auth/login'
-      const body = isRegister ? { name, email, password } : { email, password }
-      
-      const res = await fetch(`${API_URL}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      })
-      
-      const data = await res.json()
-      
-      if (!res.ok) {
-        setError(data.error || 'Something went wrong')
-        return
+      let userCredential
+      if (isRegister) {
+        userCredential = await createUserWithEmailAndPassword(auth, email, password)
+        await addDoc(collection(db, 'users'), {
+          uid: userCredential.user.uid,
+          name,
+          email,
+          createdAt: new Date().toISOString()
+        })
+      } else {
+        userCredential = await signInWithEmailAndPassword(auth, email, password)
       }
       
-      localStorage.setItem('spadesk_token', data.token)
-      localStorage.setItem('spadesk_user', JSON.stringify(data.user))
-      onLogin(data.user)
+      onLogin({ uid: userCredential.user.uid, email: userCredential.user.email, name: name || email.split('@')[0] })
       navigate('/home')
     } catch (err) {
-      setError('Server error. Please try again.')
+      if (err.code === 'auth/email-already-in-use') setError('Email already registered')
+      else if (err.code === 'auth/invalid-email') setError('Invalid email')
+      else if (err.code === 'auth/weak-password') setError('Password too weak')
+      else if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') setError('Invalid credentials')
+      else setError(err.message)
     }
   }
 
@@ -94,18 +108,6 @@ function Toast({ message, onClose }) {
   return <div className="success-toast">{message}</div>
 }
 
-function apiFetch(endpoint, options = {}) {
-  const token = localStorage.getItem('spadesk_token')
-  return fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      ...options.headers
-    }
-  })
-}
-
 function Home({ user, onLogout }) {
   const [showModal, setShowModal] = useState(null)
   const [toast, setToast] = useState(null)
@@ -116,22 +118,21 @@ function Home({ user, onLogout }) {
   const loadData = async () => {
     try {
       const [salesRes, expensesRes, customersRes] = await Promise.all([
-        apiFetch('/sales'),
-        apiFetch('/expenses'),
-        apiFetch('/customers')
+        getDocs(query(collection(db, 'sales'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'expenses'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'customers'), where('userId', '==', user.uid)))
       ])
-      if (salesRes.ok) setSales(await salesRes.json())
-      if (expensesRes.ok) setExpenses(await expensesRes.json())
-      if (customersRes.ok) setCustomers(await customersRes.json())
+      setSales(salesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setExpenses(expensesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setCustomers(customersRes.docs.map(d => ({ id: d.id, ...d.data() })))
     } catch (e) { console.error(e) }
   }
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [user.uid])
 
   const totalSales = sales.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0)
   const totalExpenses = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)
-  const profit = totalSales - totalExpenses
-
+  
   const now = new Date()
   const mtdSales = sales.filter(s => { const d = new Date(s.createdAt); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() })
   const mtdExpenses = expenses.filter(e => { const d = new Date(e.createdAt); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() })
@@ -141,9 +142,11 @@ function Home({ user, onLogout }) {
 
   const handleSave = async (type, data) => {
     try {
-      const endpoint = type === 'sale' ? '/sales' : type === 'expense' ? '/expenses' : '/customers'
-      const res = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(data) })
-      if (res.ok) { loadData(); setShowModal(null); showToast(`${type === 'sale' ? 'Sale' : type === 'expense' ? 'Expense' : 'Customer'} saved!`) }
+      const col = type === 'sale' ? 'sales' : type === 'expense' ? 'expenses' : 'customers'
+      await addDoc(collection(db, col), { ...data, userId: user.uid, createdAt: new Date().toISOString() })
+      loadData()
+      setShowModal(null)
+      showToast(`${type === 'sale' ? 'Sale' : type === 'expense' ? 'Expense' : 'Customer'} saved!`)
     } catch (e) { console.error(e) }
   }
 
@@ -190,14 +193,16 @@ function DatabaseView({ user }) {
   const loadData = async () => {
     try {
       const [salesRes, expensesRes, customersRes] = await Promise.all([
-        apiFetch('/sales'), apiFetch('/expenses'), apiFetch('/customers')
+        getDocs(query(collection(db, 'sales'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'expenses'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'customers'), where('userId', '==', user.uid)))
       ])
-      if (salesRes.ok) setSales(await salesRes.json())
-      if (expensesRes.ok) setExpenses(await expensesRes.json())
-      if (customersRes.ok) setCustomers(await customersRes.json())
+      setSales(salesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setExpenses(expensesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setCustomers(customersRes.docs.map(d => ({ id: d.id, ...d.data() })))
     } catch (e) { console.error(e) }
   }
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [user.uid])
 
   const getFilteredData = (data, dateField = 'createdAt') => {
     const now = new Date()
@@ -217,8 +222,7 @@ function DatabaseView({ user }) {
 
   const deleteItem = async (type, id) => {
     try {
-      const endpoint = type === 'sale' ? `/sales/${id}` : type === 'expense' ? `/expenses/${id}` : `/customers/${id}`
-      await apiFetch(endpoint, { method: 'DELETE' })
+      await deleteDoc(doc(db, type === 'sale' ? 'sales' : type === 'expense' ? 'expenses' : 'customers', id))
       loadData()
     } catch (e) { console.error(e) }
   }
@@ -281,13 +285,17 @@ function DownloadView({ user }) {
 
   const loadData = async () => {
     try {
-      const [salesRes, expensesRes, customersRes] = await Promise.all([apiFetch('/sales'), apiFetch('/expenses'), apiFetch('/customers')])
-      if (salesRes.ok) setSales(await salesRes.json())
-      if (expensesRes.ok) setExpenses(await expensesRes.json())
-      if (customersRes.ok) setCustomers(await customersRes.json())
+      const [salesRes, expensesRes, customersRes] = await Promise.all([
+        getDocs(query(collection(db, 'sales'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'expenses'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'customers'), where('userId', '==', user.uid)))
+      ])
+      setSales(salesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setExpenses(expensesRes.docs.map(d => ({ id: d.id, ...d.data() })))
+      setCustomers(customersRes.docs.map(d => ({ id: d.id, ...d.data() })))
     } catch (e) { console.error(e) }
   }
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [user.uid])
 
   const getFilteredData = (data, dateField = 'createdAt') => {
     const now = new Date()
@@ -410,16 +418,28 @@ function Modal({ type, onClose, onSave }) {
 
 function App() {
   const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+
   useEffect(() => {
-    const token = localStorage.getItem('spadesk_token')
-    const userData = localStorage.getItem('spadesk_user')
-    if (token && userData) setUser(JSON.parse(userData))
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setUser({ uid: firebaseUser.uid, email: firebaseUser.email, name: firebaseUser.displayName || firebaseUser.email.split('@')[0] })
+      } else {
+        setUser(null)
+      }
+      setLoading(false)
+    })
+    return () => unsubscribe()
   }, [])
 
-  const handleLogin = (userData) => setUser(userData)
-  const handleLogout = () => { localStorage.removeItem('spadesk_token'); localStorage.removeItem('spadesk_user'); setUser(null) }
+  const handleLogout = async () => {
+    await signOut(auth)
+    setUser(null)
+  }
 
-  if (!user) return <BrowserRouter><Routes><Route path="/*" element={<Login onLogin={handleLogin} />} /></Routes></BrowserRouter>
+  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: 'white' }}>Loading...</div>
+
+  if (!user) return <BrowserRouter><Routes><Route path="/*" element={<Login onLogin={setUser} />} /></Routes></BrowserRouter>
 
   return <BrowserRouter><Routes><Route path="/home" element={<Home user={user} onLogout={handleLogout} />} /><Route path="/database" element={<DatabaseView user={user} />} /><Route path="/download" element={<DownloadView user={user} />} /><Route path="/*" element={<Navigate to="/home" />} /></Routes></BrowserRouter>
 }
