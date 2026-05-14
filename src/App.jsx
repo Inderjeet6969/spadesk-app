@@ -6,14 +6,13 @@ import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, si
 import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, where } from 'firebase/firestore'
 import './index.css'
 
-// TODO: Replace with your Firebase config from Firebase Console
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyD1k-A_3NpczsUQR3WZR9oVt5HoqgKVgVg",
+  authDomain: "spadesk-19.firebaseapp.com",
+  projectId: "spadesk-19",
+  storageBucket: "spadesk-19.firebasestorage.app",
+  messagingSenderId: "100974817150",
+  appId: "1:100974817150:web:9420399e6551978f7d4d2f"
 }
 
 const app = initializeApp(firebaseConfig)
